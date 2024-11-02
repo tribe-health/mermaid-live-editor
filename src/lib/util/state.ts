@@ -1,12 +1,16 @@
-import { writable, get, type Readable, derived } from 'svelte/store';
-import { persist, localStorage } from './persist';
-import { saveStatistics, countLines } from './stats';
-import { serializeState, deserializeState } from './serde';
-import { cmdKey, errorDebug, formatJSON } from './util';
-import { parse } from './mermaid';
-
 import type { ErrorHash, MarkerData, State, ValidatedState } from '$lib/types';
+import { debounce } from 'lodash-es';
 import type { MermaidConfig } from 'mermaid';
+import { derived, get, writable, type Readable } from 'svelte/store';
+import {
+  extractErrorLineText,
+  findMostRelevantLineNumber,
+  replaceLineNumberInErrorMessage
+} from './errorHandling';
+import { parse } from './mermaid';
+import { localStorage, persist } from './persist';
+import { deserializeState, serializeState } from './serde';
+import { errorDebug, formatJSON } from './util';
 
 export const defaultState: State = {
   code: `flowchart TD
@@ -20,6 +24,7 @@ export const defaultState: State = {
     theme: 'default'
   }),
   autoSync: true,
+  rough: false,
   updateDiagram: true
 };
 
@@ -67,18 +72,34 @@ const processState = async (state: State) => {
     console.error(error);
     if ('hash' in error) {
       try {
-        const {
-          loc: { first_line, last_line, first_column, last_column }
+        let errorString = processed.error.toString();
+        const errorLineText = extractErrorLineText(errorString);
+        const realLineNumber = findMostRelevantLineNumber(errorLineText, state.code);
+
+        let first_line: number, last_line: number, first_column: number, last_column: number;
+        try {
           // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        } = error.hash as ErrorHash;
+          ({ first_line, last_line, first_column, last_column } = (error.hash as ErrorHash).loc);
+        } catch {
+          const lineNo = findMostRelevantLineNumber(errorString, state.code);
+          first_line = lineNo;
+          last_line = lineNo + 1;
+          first_column = 0;
+          last_column = 0;
+        }
+
+        if (realLineNumber !== -1) {
+          errorString = replaceLineNumberInErrorMessage(errorString, realLineNumber);
+        }
+
+        processed.error = new Error(errorString);
         const marker: MarkerData = {
           severity: 8, // Error
-          startLineNumber: first_line,
+          startLineNumber: realLineNumber,
           startColumn: first_column,
-          endLineNumber: last_line,
-          endColumn: last_column + 1,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
-          message: error.str
+          endLineNumber: last_line + (realLineNumber - first_line),
+          endColumn: last_column + (first_column === last_column ? 0 : 5),
+          message: errorString || 'Syntax error'
         };
         processed.errorMarkers = [marker];
       } catch (error) {
@@ -134,7 +155,6 @@ export const updateCodeStore = (newState: Partial<State>): void => {
   });
 };
 
-let prompted = false;
 export const updateCode = (
   code: string,
   {
@@ -142,21 +162,7 @@ export const updateCode = (
     resetPanZoom = false
   }: { updateDiagram?: boolean; resetPanZoom?: boolean } = {}
 ): void => {
-  // console.log('updateCode', code);
-  const lines = countLines(code);
-  saveStatistics(code);
   errorDebug();
-  if (lines > 50 && !prompted && get(stateStore).autoSync) {
-    const turnOff = confirm(
-      `Long diagram detected. Turn off Auto Sync? Use ${cmdKey} + Enter or click the sync logo to manually sync.`
-    );
-    prompted = true;
-    if (turnOff) {
-      updateCodeStore({
-        autoSync: false
-      });
-    }
-  }
 
   inputStateStore.update((state) => {
     if (resetPanZoom) {
@@ -185,13 +191,13 @@ export const toggleDarkTheme = (dark: boolean): void => {
   });
 };
 
-let urlDebounce: number;
 export const initURLSubscription = (): void => {
+  const updateHash = debounce((hash) => {
+    history.replaceState(undefined, '', `#${hash}`);
+  }, 250);
+
   stateStore.subscribe(({ serialized }) => {
-    clearTimeout(urlDebounce);
-    urlDebounce = window.setTimeout(() => {
-      history.replaceState(undefined, '', `#${serialized}`);
-    }, 250);
+    updateHash(serialized);
   });
 };
 

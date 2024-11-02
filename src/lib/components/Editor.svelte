@@ -1,16 +1,27 @@
+<script lang="ts" context="module">
+  declare global {
+    interface Window {
+      Cypress: boolean;
+      editorLoaded: boolean;
+    }
+  }
+</script>
+
 <script lang="ts">
   import type { EditorMode } from '$lib/types';
+  import { initEditor } from '$lib/util/monacoExtra';
+  import { sanitizeText } from '$lib/util/sanitize';
   import { stateStore, updateCode, updateConfig } from '$lib/util/state';
+  import { logEvent } from '$lib/util/stats';
   import { themeStore } from '$lib/util/theme';
   import { errorDebug, syncDiagram } from '$lib/util/util';
-  import type monaco from 'monaco-editor';
-  import { onMount } from 'svelte';
-  import initEditor from 'monaco-mermaid';
-  import { logEvent } from '$lib/util/stats';
+  import * as monaco from 'monaco-editor';
+  import monacoEditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+  import monacoJsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+  import { onDestroy, onMount } from 'svelte';
 
-  let divEl: HTMLDivElement | undefined = undefined;
+  let divElement: HTMLDivElement | undefined;
   let editor: monaco.editor.IStandaloneCodeEditor | undefined;
-  let Monaco: typeof monaco | undefined;
   let editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = {
     minimap: {
       enabled: false
@@ -22,7 +33,7 @@
 
   stateStore.subscribe(({ errorMarkers, editorMode, code, mermaid }) => {
     // console.log('editor store subscription', { code, mermaid });
-    if (!editor || !Monaco) {
+    if (!editor) {
       return;
     }
 
@@ -30,6 +41,7 @@
     const newText = editorMode === 'code' ? code : mermaid;
     if (newText !== text) {
       // console.log('updating editor text', newText);
+      editor.setScrollTop(0);
       editor.setValue(newText);
       text = newText;
     }
@@ -42,15 +54,15 @@
       return;
     }
     if (model.getLanguageId() !== language) {
-      Monaco.editor.setModelLanguage(model, language);
+      monaco.editor.setModelLanguage(model, language);
     }
 
     // Display/clear errors
-    Monaco.editor.setModelMarkers(model, 'mermaid', errorMarkers);
+    monaco.editor.setModelMarkers(model, 'mermaid', errorMarkers);
   });
 
   themeStore.subscribe(({ isDark }) => {
-    editor && Monaco?.editor.setTheme(isDark ? 'mermaid-dark' : 'mermaid');
+    editor && monaco.editor.setTheme(isDark ? 'mermaid-dark' : 'mermaid');
   });
 
   const handleUpdate = (text: string, mode: EditorMode) => {
@@ -62,36 +74,25 @@
     }
   };
 
-  const loadMonaco = async () => {
-    console.log('Loading Monaco...');
-    // errorDebug();
-    let i = 0;
-    while (i++ < 500) {
-      // @ts-expect-error : This is a hack to handle a svelte-kit error when importing monaco.
-      Monaco = window.monaco;
-      if (Monaco !== undefined) {
-        return;
+  onMount(() => {
+    self.MonacoEnvironment = {
+      getWorker(_, label) {
+        if (label === 'json') {
+          return new monacoJsonWorker();
+        }
+        return new monacoEditorWorker();
       }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    alert('Loading Monaco Editor failed. Please try refreshing the page.');
-  };
+    };
 
-  onMount(async () => {
-    await loadMonaco(); // Fix https://github.com/mermaid-js/mermaid-live-editor/issues/175
-    if (!Monaco) {
-      throw new Error('Monaco failed to load');
-    }
-    if (!divEl) {
+    if (!divElement) {
       throw new Error('divEl is undefined');
     }
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    initEditor(Monaco);
-    errorDebug(100);
-    editor = Monaco.editor.create(divEl, editorOptions);
-    editor.onDidChangeModelContent(({ isFlush, changes }) => {
+    initEditor(monaco);
+    errorDebug();
+    editor = monaco.editor.create(divElement, editorOptions);
+    editor.onDidChangeModelContent(({ isFlush }) => {
       const newText = editor?.getValue();
-      // console.log('editor onDidChangeModelContent', { text, newText, isFlush, changes });
       if (!newText || text === newText || isFlush) {
         return;
       }
@@ -101,31 +102,48 @@
     editor.addAction({
       id: 'mermaid-render-diagram',
       label: 'Render Diagram',
-      keybindings: [Monaco.KeyMod.CtrlCmd | Monaco.KeyCode.Enter],
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
       run: function () {
         syncDiagram();
         logEvent('renderDiagram', {
-          method: 'keyboadShortcut'
+          method: 'keyboardShortcut'
         });
       }
     });
-    Monaco.editor.setTheme($themeStore.isDark ? 'mermaid-dark' : 'mermaid');
+    monaco.editor.setTheme($themeStore.isDark ? 'mermaid-dark' : 'mermaid');
     const resizeObserver = new ResizeObserver((entries) => {
-      editor!.layout({
+      editor?.layout({
         height: entries[0].contentRect.height,
         width: entries[0].contentRect.width
       });
     });
 
-    if (divEl.parentElement) {
-      resizeObserver.observe(divEl.parentElement);
+    if (divElement.parentElement) {
+      resizeObserver.observe(divElement);
     }
-    // console.log(`editor mounted`);
-    return () => {
-      // console.log(`editor disposed`);
-      editor?.dispose();
-    };
+
+    if (window.Cypress) {
+      window.editorLoaded = true;
+    }
+  });
+
+  onDestroy(() => {
+    editor?.dispose();
   });
 </script>
 
-<div bind:this={divEl} id="editor" class="overflow-hidden" />
+<div class="flex h-full flex-col">
+  <div bind:this={divElement} id="editor" class="h-full flex-grow overflow-hidden" />
+  {#if $stateStore.error instanceof Error}
+    <div class="flex flex-col text-sm text-neutral-100">
+      <div class="flex items-center gap-2 bg-red-700 p-2">
+        <i class="fa fa-exclamation-circle w-4" aria-hidden="true" />
+        <p>Diagram syntax error</p>
+      </div>
+      <div class="max-h-32 overflow-auto bg-red-600 p-2 font-mono">
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+        {@html sanitizeText($stateStore.error?.toString().replaceAll('\n', '<br />'))}
+      </div>
+    </div>
+  {/if}
+</div>

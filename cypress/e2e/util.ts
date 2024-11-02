@@ -1,12 +1,26 @@
 export const cmd = `{${Cypress.platform === 'darwin' ? 'meta' : 'ctrl'}}`;
 
-export const getEditor = ({ bottom = true, newline = false } = {}) =>
-  cy
-    .get('#editor textarea:first')
-    .click()
-    .focused()
-    .type(`${bottom ? '{pageDown}' : cmd}`)
-    .type(`${newline ? '{enter}' : cmd}`);
+interface EditorOptions {
+  bottom?: boolean;
+  newline?: boolean;
+}
+
+export const typeInEditor = (
+  text: string,
+  { bottom = true, newline = false }: EditorOptions = {}
+) => {
+  cy.window().should('have.property', 'editorLoaded', true);
+  cy.get('#editor').click();
+  cy.get('#editor').within(() => {
+    if (bottom) {
+      cy.get('textarea').type('{pageDown}');
+    }
+    if (newline) {
+      cy.get('textarea').type('{enter}');
+    }
+    cy.get('textarea').type(text);
+  });
+};
 
 const downloadsFolder = Cypress.config('downloadsFolder');
 
@@ -15,17 +29,15 @@ export const verifyFileSizeGreaterThan = (
   extension: string,
   size: number
 ) => {
-  const fileName = `mermaid-${fileType}-2022-01-01-000000.${extension}`;
-  const filePath = `${downloadsFolder}/${fileName}`;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-  cy.verifyDownload(fileName);
-  cy.readFile(filePath, null, {
-    log: false
-  }).then((buffer: ArrayBuffer) => {
-    expect(buffer.byteLength).to.be.gt(size);
-    expect(buffer.byteLength).to.be.lt(size * 1.3);
+  cy.get('#view').should('not.have.class', 'outOfSync');
+  cy.task('readAndDeleteFile', {
+    folder: downloadsFolder,
+    fileNamePattern: `^mermaid-${fileType}-.*.${extension}$`,
+    mode: 'size'
+  }).then((fileSize: number) => {
+    expect(fileSize).to.be.gt(size);
+    expect(fileSize).to.be.lt(size * 1.3);
   });
-  cy.task('deleteFile', filePath);
 };
 
 export const verifyFileSnapshot = (
@@ -33,14 +45,11 @@ export const verifyFileSnapshot = (
   extension: string,
   content: string
 ) => {
-  const fileName = `mermaid-${fileType}-2022-01-01-000000.${extension}`;
-  const filePath = `${downloadsFolder}/${fileName}`;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-  cy.verifyDownload(fileName);
-  cy.readFile(filePath, null, {
-    log: false
-  }).then((buffer: ArrayBuffer) =>
-    expect(new TextDecoder('utf8').decode(buffer)).to.contain(content)
-  );
-  cy.task('deleteFile', filePath);
+  cy.task('readAndDeleteFile', {
+    folder: downloadsFolder,
+    fileNamePattern: `^mermaid-${fileType}-.*.${extension}$`,
+    mode: 'content'
+  }).then((fileContent: number) => {
+    expect(fileContent).to.contain(content);
+  });
 };
