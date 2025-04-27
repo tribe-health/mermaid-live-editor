@@ -1,8 +1,9 @@
-import { initURLSubscription, loadState, updateCodeStore } from './state';
-import { analytics, initAnalytics } from './stats';
+import { env } from './env';
 import { loadDataFromUrl } from './fileLoaders/loader';
 import { initLoading } from './loading';
 import { applyMigrations } from './migrations';
+import { initURLSubscription, loadState, updateCodeStore, verifyState } from './state';
+import { initAnalytics, plausible } from './stats';
 
 export const loadStateFromURL = (): void => {
   loadState(window.location.hash.slice(1));
@@ -21,14 +22,18 @@ export const initHandler = async (): Promise<void> => {
   syncDiagram();
   initURLSubscription();
   await initAnalytics();
-  await analytics?.page();
+  plausible?.trackPageview({ url: window.location.origin + window.location.pathname });
+  verifyState();
 };
 
 export const isMac = navigator.platform.toUpperCase().includes('MAC');
 export const cmdKey = isMac ? 'Cmd' : 'Ctrl';
+export const MCBaseURL = env.isEnabledMermaidChartLinks
+  ? 'https://mermaidchart.com' // 'http://localhost:5174'
+  : 'https://example.com';
 
 let count = 0;
-export const errorDebug = (limit = 100) => {
+export const errorDebug = (limit = 1000) => {
   count += 1;
   if (count > limit) {
     console.log(count, limit);
@@ -46,3 +51,34 @@ export const fetchText = async (url: string): Promise<string> => {
   const res = await fetch(url);
   return res.text();
 };
+
+export const copyToClipboard = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    fallbackCopyToClipboard(text);
+  }
+};
+
+function fallbackCopyToClipboard(text: string) {
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  // Make the textarea out of viewport
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-999999px';
+  textArea.style.top = '-999999px';
+  document.body.append(textArea);
+
+  textArea.focus();
+  textArea.select();
+
+  try {
+    // The deprecated but widely supported method
+    document.execCommand('copy');
+  } catch (error) {
+    console.error('Failed to copy:', error);
+    throw error;
+  } finally {
+    textArea.remove();
+  }
+}

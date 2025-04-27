@@ -7,15 +7,17 @@ module.exports = {
     // 'plugin:@typescript-eslint/recommended-requiring-type-checking',
     'plugin:@typescript-eslint/strict',
     'plugin:unicorn/recommended',
+    'plugin:svelte/recommended',
+    'plugin:svelte/prettier',
     'prettier'
   ],
   plugins: [
-    'svelte3',
     'tailwindcss',
     '@typescript-eslint',
     'es',
     'vitest',
     'no-only-tests',
+    'sort-keys',
     'unicorn'
   ],
   ignorePatterns: [
@@ -30,7 +32,13 @@ module.exports = {
     'tsconfig.json'
   ],
   overrides: [
-    { files: ['*.svelte'], processor: 'svelte3/svelte3' },
+    {
+      files: ['*.svelte'],
+      parser: 'svelte-eslint-parser',
+      parserOptions: {
+        parser: '@typescript-eslint/parser'
+      }
+    },
     {
       files: ['*.ts'],
       extends: [
@@ -40,24 +48,30 @@ module.exports = {
         'plugin:@typescript-eslint/strict',
         'prettier'
       ]
+    },
+    {
+      files: ['**/components/ui/**'],
+      rules: {
+        'unicorn/prefer-export-from': 'off',
+        'unicorn/prevent-abbreviations': 'off',
+        'unicorn/explicit-length-check': 'off',
+        'sort-keys/sort-keys-fix': 'off'
+      }
     }
   ],
-  settings: {
-    'svelte3/typescript': () => require('typescript')
-  },
   parserOptions: {
     sourceType: 'module',
     ecmaVersion: 2020,
     tsconfigRootDir: __dirname,
-    project: ['./tsconfig.json'],
-    extraFileExtensions: ['.svelte'],
-    allowAutomaticSingleRunInference: true
+    project: './tsconfig.json',
+    extraFileExtensions: ['.svelte']
   },
   env: {
     browser: true,
     es2020: true
   },
   rules: {
+    'sort-keys/sort-keys-fix': ['error', 'asc', { minKeys: 5 }],
     '@typescript-eslint/ban-ts-comment': [
       'error',
       {
@@ -76,21 +90,28 @@ module.exports = {
         case: 'camelCase'
       }
     ],
+    'unicorn/filename-case': 'off',
     'unicorn/prevent-abbreviations': [
       'error',
       {
         allowList: {
+          args: true,
           ctx: true,
           db: true,
           doc: true,
           env: true,
           fn: true,
           i: true,
+          j: true,
+          k: true,
           param: true,
+          Params: true,
+          params: true,
+          Props: true,
+          props: true,
           req: true,
           res: true,
           str: true,
-          searchParams: true,
           temp: true,
           ImportMetaEnv: true
         }
